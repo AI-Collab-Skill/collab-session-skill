@@ -3,10 +3,12 @@ name: collab-session
 description: >
   This skill should be used when the user asks to "start a collab", "share this with a colleague",
   "hand off this brainstorm", "continue someone else's thread", "let my colleague pick this up",
-  "what sessions are active", "join Dan's thread", "set up a shared workspace", or invokes any
-  /collab command (whoami, init, new, list, join, save, compress, refresh, close). Enables async collaborative
-  brainstorming between multiple human+Claude pairs via shared workspaces with write-once block
-  files — no merge conflicts by design. Supports network drive and mini git repo transports.
+  "what sessions are active", "join Dan's thread", "set up a shared workspace", "what did Dan say",
+  "catch me up", "what happened in the session", "show me the history", or invokes any /collab
+  command (whoami, init, new, list, join, save, compress, catchup, history, refresh, close).
+  Enables async collaborative brainstorming between multiple human+Claude pairs via shared
+  workspaces with write-once block files — no merge conflicts by design. Supports network drive
+  and mini git repo transports.
 ---
 
 # Collab Session Skill
@@ -183,6 +185,16 @@ Front door for the team. Shows what's active and who last touched it.
 Load a session as a new participant or resume your own.
 This is the primary entry point for picking up a colleague's thread.
 
+Join loads two layers of history:
+1. **Summary** (`_summary.json`) — compressed narrative of all blocks up to the last
+   `/collab compress` checkpoint. This is the "story so far" in tight form.
+2. **Raw blocks since** — all block files newer than the summary's
+   `compressed_through_timestamp`, loaded verbatim in chronological order.
+
+This means a fresh joiner gets a fast, high-quality briefing (the summary) plus full
+fidelity on recent uncompressed work. Use `/collab catchup` to ask questions about
+either layer. Use `/collab history` to dig into raw blocks behind the summary.
+
 **Steps:**
 1. Read identity and transport config.
 2. **If mini-repo:** `git pull origin main` — report how many new files were fetched:
@@ -297,6 +309,73 @@ Deliberately compress raw blocks into a tight narrative summary. This is the **q
 
 ---
 
+### `/collab catchup [question]`
+
+Ask questions about the session without doing a full join. Useful mid-conversation to
+check what colleagues have contributed, or to query specific topics.
+
+**Examples:**
+- `/collab catchup` — "What's happened since I last saved?"
+- `/collab catchup what did Dan say about the API?`
+- `/collab catchup any decisions on the data model?`
+- `/collab catchup summarise Brian's blocks`
+
+**Steps:**
+1. Read identity and transport config.
+2. **If mini-repo:** `git pull origin main` silently.
+3. Resolve the active session.
+4. Read `_summary.json` and glob all block files newer than `compressed_through_timestamp`.
+5. If a question was provided, search across the summary and recent blocks to answer it
+   specifically. Filter by participant name if asked about a specific person.
+6. If no question, provide a quick status:
+   > **Since your last save:**
+   > Dan saved 2 blocks (14:35, 15:10):
+   > — Proposed using EA station IDs for the hydrology join
+   > — Open question: should we store enriched data in ThamesWatch or separately?
+   >
+   > Brian saved 1 block (15:22):
+   > — Confirmed stationIds are EA gauging station references
+   > — Provided missing IDs for Kingston sites
+7. Do NOT write any files. This is read-only.
+
+---
+
+### `/collab history [range]`
+
+Browse raw blocks behind the summary — dig back into the full conversation history.
+Useful when the summary compressed away detail that turns out to be important.
+
+**Examples:**
+- `/collab history` — list all blocks with timestamps and participants
+- `/collab history 1-3` — show raw content of blocks 1 through 3
+- `/collab history dan` — show all of Dan's blocks
+- `/collab history before compress` — show blocks that were compressed into the summary
+
+**Steps:**
+1. Read transport config.
+2. **If mini-repo:** `git pull origin main` silently.
+3. Resolve the active session.
+4. Glob all block files. Sort by timestamp ascending. Number them 1..N.
+5. If no range specified, list all blocks as an index:
+   ```
+   ## Session History — 8 blocks
+
+     1. simon_20260314T120500Z  — Simon  — 14 Mar 12:05  [compressed]
+     2. dan_20260314T121200Z    — Dan    — 14 Mar 12:12  [compressed]
+     3. simon_20260314T130000Z  — Simon  — 14 Mar 13:00  [compressed]
+     ── compress checkpoint ──
+     4. brian_20260314T140000Z  — Brian  — 14 Mar 14:00
+     5. simon_20260314T143000Z  — Simon  — 14 Mar 14:30
+     6. dan_20260314T150000Z    — Dan    — 14 Mar 15:00
+   ```
+   Mark blocks older than `compressed_through_timestamp` as `[compressed]` — their content
+   is in the summary but the raw files are still available.
+6. If a range, participant name, or `before compress` is specified, read and display the
+   matching raw block files. Show the full turns content.
+7. Do NOT write any files. This is read-only.
+
+---
+
 ### `/collab refresh`
 
 Pull latest colleague saves without fully reloading the session. For near-real-time use —
@@ -371,6 +450,16 @@ speed and losslessness over polish. Compression is a separate deliberate step vi
 `/collab compress`, which reads raw blocks and produces a tight narrative summary.
 This separation means saves are near-instant and no nuance is lost to over-eager extraction.
 
+**Compression is a checkpoint, not a deletion.** When `/collab compress` runs, it writes a
+narrative summary to `_summary.json` — but the raw block files are always preserved.
+The summary is an acceleration layer for `/collab join`, not a replacement. Anyone can
+browse the original raw blocks via `/collab history` at any time.
+
+**Two layers of history.** Join loads: (1) the compressed summary (everything before the
+last compress checkpoint) + (2) raw blocks since. This gives newcomers a fast brief plus
+full fidelity on recent work. `/collab catchup` queries both layers interactively.
+`/collab history` digs into raw blocks behind the summary when needed.
+
 **The handoff brief is the product.** Tight, narrative, actionable. Someone should be able
 to dive into a session within 30 seconds of running `/collab join`. The `/collab compress`
 step ensures the summary powering the brief is high quality.
@@ -425,13 +514,26 @@ step ensures the summary powering the brief is high quality.
 /collab save    ← Simon writes simon_...Z.json, pushes
 /collab save    ← Dan writes dan_...Z.json, pushes (no conflict)
 
-# Simon gets notified Dan saved, refreshes
-/collab refresh
-→ pulls, shows Dan's new block summary without full context reload
+# Simon gets notified Dan saved, checks what Dan said
+/collab catchup what did Dan say?
+→ pulls, reads Dan's new blocks, answers the question
 
-# After several saves, compress for a cleaner handoff brief
+# Or just pull the latest without context reload
+/collab refresh
+→ pulls, shows new block summary
+
+# After several saves, compress to create a checkpoint
 /collab compress
 → reads all raw blocks, writes tight narrative to _summary.json
+→ future /collab join starts from this summary + any blocks after it
+
+# Later, someone needs detail from before the compress
+/collab history before compress
+→ shows raw blocks that were compressed, full content preserved
+
+# New person joins — gets summary + recent raw blocks
+/collab join skill-project workspace-arch
+→ fast brief from summary, then raw blocks since compress
 
 # Topic done
 /collab close   ← writes _final_summary.json, pushes, marks closed
