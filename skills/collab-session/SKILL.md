@@ -4,7 +4,7 @@ description: >
   This skill should be used when the user asks to "start a collab", "share this with a colleague",
   "hand off this brainstorm", "continue someone else's thread", "let my colleague pick this up",
   "what sessions are active", "join Dan's thread", "set up a shared workspace", or invokes any
-  /collab command (whoami, init, new, list, join, save, refresh, close). Enables async collaborative
+  /collab command (whoami, init, new, list, join, save, compress, refresh, close). Enables async collaborative
   brainstorming between multiple human+Claude pairs via shared workspaces with write-once block
   files — no merge conflicts by design. Supports network drive and mini git repo transports.
 ---
@@ -226,43 +226,74 @@ project repo — on a network drive or in a dedicated mini git repo.
 
 ### `/collab save`
 
-Write this session's progress to a new block file. Never modifies any existing file.
+Write this session's progress to a new block file. **Optimised for speed** — dumps raw
+conversation turns with minimal processing. Never modifies any existing block file.
 
 **Steps:**
 1. Read identity and transport config.
 2. **If mini-repo:** `git pull origin main` first — surface any new colleague blocks:
    > Dan saved 1 new block while you were working. It's included in the session context.
    Then silently incorporate any new blocks into awareness before extracting the current turn.
-3. Ask: "Anything specific to flag — decisions, open questions?" (can say "just extract it").
-4. Generate timestamp: ISO 8601 UTC compact — `20260314T142001Z`.
+3. Generate timestamp: ISO 8601 UTC compact — `20260314T142001Z`.
    Collision guard: if `<name>_<timestamp>.json` already exists, append `_2`, `_3`.
-5. Extract from conversation since last save (or full conversation if first save):
-   - Meaningful turn summaries — not verbatim transcript, preserve reasoning
-   - **Decisions**: concrete conclusions
-   - **Open questions**: unresolved threads
-6. Write `<name>_<timestamp>.json` to session folder (see `references/schemas.md`).
-7. Update `_meta.json`: participants list, last_save_by, last_save_at, total_saves,
+4. Dump raw conversation turns since last save (or full conversation if first save):
+   - Include all human and claude turns as-is — preserve the full exchange
+   - Do NOT summarise, compress, or rewrite turns — speed over polish
+   - Optionally tag decisions and open questions if they are obvious, but do not
+     slow down the save to extract them exhaustively. Empty arrays are fine.
+5. Write `<name>_<timestamp>.json` to session folder (see `references/schemas.md`).
+6. Update `_meta.json`: participants list, last_save_by, last_save_at, total_saves,
    open_question_count.
-8. **Compression check** — if more than 5 block files exist newer than
-   `_summary.compressed_through_timestamp`, offer:
-   > "5 uncompressed blocks — want me to rewrite the summary? (~20 seconds)"
-   If yes: read all uncompressed blocks, rewrite `_summary.json` as a tight narrative,
-   update `compressed_through_timestamp`.
-9. **If mini-repo:**
+7. **If mini-repo:**
    ```
-   git add <block-file> _meta.json [_summary.json if rewritten]
+   git add <block-file> _meta.json
    git commit -m "collab: <name> — <workspace>/<topic> block <N>"
    git push origin main
    ```
    Report: > Pushed to main. Colleagues will see this on their next join or refresh.
-10. Confirm:
-    > Saved: `simon_20260314T142001Z.json`
-    > Decisions: <list>
-    > Open questions: <list>
-    > Session: <N> total saves from <participants>.
+8. Confirm:
+   > Saved: `simon_20260314T142001Z.json`
+   > Session: <N> total saves from <participants>.
 
-    If total_saves >= 10:
-    > Getting long — consider `/collab close` when this topic wraps up.
+   If total_saves >= 10:
+   > Getting long — consider `/collab close` when this topic wraps up.
+
+   If more than 5 uncompressed blocks exist:
+   > <N> uncompressed blocks — run `/collab compress` when ready.
+
+---
+
+### `/collab compress`
+
+Deliberately compress raw blocks into a tight narrative summary. This is the **quality pass**
+— separate from save so that saving stays fast and lossless.
+
+**Steps:**
+1. Read identity and transport config.
+2. **If mini-repo:** `git pull origin main` first.
+3. Resolve the active session (or accept `<workspace> <topic>` arguments).
+4. Read `_summary.json` to find `compressed_through_timestamp`.
+5. Glob all block files newer than that timestamp (or all blocks if no prior compression).
+6. Read each uncompressed block in chronological order.
+7. Synthesise a tight narrative summary covering all blocks — including any already in
+   `_summary.json`. The result replaces the existing summary, not appends.
+   - Extract and consolidate **decisions** across all blocks
+   - Extract and consolidate **open questions** — remove any that have been resolved
+   - Compress filler, preserve reasoning and key exchanges
+8. Rewrite `_summary.json` with the new narrative and update `compressed_through_timestamp`
+   to the latest block's timestamp.
+9. Update `_meta.json`: `open_question_count`.
+10. **If mini-repo:**
+    ```
+    git add <session-folder>/_summary.json <session-folder>/_meta.json
+    git commit -m "collab: compress — <workspace>/<topic>"
+    git push origin main
+    ```
+11. Confirm:
+    > Compressed <N> blocks into summary.
+    > Decisions: <consolidated list>
+    > Open questions: <consolidated list>
+    > Raw blocks preserved — summary used for faster `/collab join`.
 
 ---
 
@@ -335,11 +366,14 @@ history is a perfect audit log of who saved what and when.
 small and structured. On mini-repo, the pull-before-save step means conflicts are rare;
 if they occur on the metadata fields (not block content), `git mergetool` resolves trivially.
 
-**Extract, don't transcribe.** Blocks are meeting notes, not chat logs. Compress filler,
-preserve reasoning, always explicitly capture decisions and open questions.
+**Save fast, compress later.** Saves dump raw conversation turns with no summarisation —
+speed and losslessness over polish. Compression is a separate deliberate step via
+`/collab compress`, which reads raw blocks and produces a tight narrative summary.
+This separation means saves are near-instant and no nuance is lost to over-eager extraction.
 
 **The handoff brief is the product.** Tight, narrative, actionable. Someone should be able
-to dive into a session within 30 seconds of running `/collab join`.
+to dive into a session within 30 seconds of running `/collab join`. The `/collab compress`
+step ensures the summary powering the brief is high quality.
 
 ---
 
@@ -394,6 +428,10 @@ to dive into a session within 30 seconds of running `/collab join`.
 # Simon gets notified Dan saved, refreshes
 /collab refresh
 → pulls, shows Dan's new block summary without full context reload
+
+# After several saves, compress for a cleaner handoff brief
+/collab compress
+→ reads all raw blocks, writes tight narrative to _summary.json
 
 # Topic done
 /collab close   ← writes _final_summary.json, pushes, marks closed

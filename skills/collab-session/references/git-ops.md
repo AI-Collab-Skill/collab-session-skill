@@ -46,14 +46,21 @@ Report the result to the user:
 cd <root>
 git add <workspace>/session-<NNN>_<topic>/<n>_<timestamp>.json
 git add <workspace>/session-<NNN>_<topic>/_meta.json
-# Only if compression ran:
-git add <workspace>/session-<NNN>_<topic>/_summary.json
 git commit -m "collab: <n> — <workspace>/<topic> [block <N>]"
 git push origin main
 ```
 
 Commit message format: `collab: <participant> — <workspace>/<topic> [block <N>]`
 Example: `collab: simon — skill-project/workspace-arch [block 3]`
+
+**For `/collab compress` — commit the rewritten summary + updated metadata:**
+```bash
+cd <root>
+git add <workspace>/session-<NNN>_<topic>/_summary.json
+git add <workspace>/session-<NNN>_<topic>/_meta.json
+git commit -m "collab: compress — <workspace>/<topic>"
+git push origin main
+```
 
 **For `/collab new`:**
 ```bash

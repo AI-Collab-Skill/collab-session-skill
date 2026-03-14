@@ -178,8 +178,12 @@ Written once by `/collab save`. Never modified.
 }
 ```
 
-**Turns field:** meaningful compression of the conversation — not a verbatim transcript.
-Preserve reasoning and key exchanges. Compress filler and repetition.
+**Turns field:** raw conversation turns dumped as-is for speed. Do not summarise or compress
+during save — preserve the full exchange. Compression happens later via `/collab compress`,
+which reads raw blocks and writes a tight narrative to `_summary.json`.
+
+**Decisions and open_questions:** tag these if obvious during save, but empty arrays are
+acceptable. The `/collab compress` step extracts and consolidates these exhaustively.
 
 ---
 
