@@ -1,0 +1,27 @@
+name: Check Version Bump
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check version was bumped
+        run: |
+          PR_VERSION=$(jq -r '.plugins[0].version' .claude-plugin/marketplace.json)
+          git checkout origin/main -- .claude-plugin/marketplace.json 2>/dev/null
+          MAIN_VERSION=$(jq -r '.plugins[0].version' .claude-plugin/marketplace.json)
+          git checkout HEAD -- .claude-plugin/marketplace.json
+
+          if [ "$PR_VERSION" = "$MAIN_VERSION" ]; then
+            echo "::error::Version in marketplace.json ($PR_VERSION) has not been bumped. Update the version before merging."
+            exit 1
+          fi
+
+          echo "Version bumped: $MAIN_VERSION → $PR_VERSION"
